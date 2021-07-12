@@ -11,18 +11,12 @@ import java.util.List;
  * @describe：解决预览时传值过大问题
  */
 public class ImagesObservable {
-    private List<LocalMedia> data;
-    private static ImagesObservable sObserver;
+    private List<LocalMedia> mData = new ArrayList<>();
+
+    private static final ImagesObservable mInstance = new ImagesObservable();
 
     public static ImagesObservable getInstance() {
-        if (sObserver == null) {
-            synchronized (ImagesObservable.class) {
-                if (sObserver == null) {
-                    sObserver = new ImagesObservable();
-                }
-            }
-        }
-        return sObserver;
+        return mInstance;
     }
 
     /**
@@ -30,23 +24,21 @@ public class ImagesObservable {
      *
      * @param data
      */
-    public void savePreviewMediaData(List<LocalMedia> data) {
-        this.data = data;
+    public void saveData(List<LocalMedia> data) {
+        this.mData = data;
     }
 
     /**
      * 读取预览的图片
      */
-    public List<LocalMedia> readPreviewMediaData() {
-        return data == null ? new ArrayList<>() : data;
+    public List<LocalMedia> getData() {
+        return mData;
     }
 
     /**
      * 清空预览的图片
      */
-    public void clearPreviewMediaData() {
-        if (data != null) {
-            data.clear();
-        }
+    public void clearData() {
+        mData.clear();
     }
 }

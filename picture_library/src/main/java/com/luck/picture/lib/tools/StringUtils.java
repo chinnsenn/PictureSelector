@@ -39,7 +39,7 @@ public class StringUtils {
      */
     public static int stringToInt(String str) {
         Pattern pattern = Pattern.compile("^[-\\+]?[\\d]+$");
-        return pattern.matcher(str).matches() ? Integer.valueOf(str) : 0;
+        return pattern.matcher(str).matches() ? ValueOf.toInt(str) : 0;
     }
 
     /**
@@ -82,5 +82,20 @@ public class StringUtils {
     public static String renameSuffix(String fileName, String suffix) {
         String temp = fileName.substring(0, fileName.lastIndexOf("."));
         return temp + suffix;
+    }
+
+    /**
+     * getEncryptionValue
+     *
+     * @param id
+     * @param width
+     * @param height
+     * @return
+     */
+    public static String getEncryptionValue(long id, int width, int height) {
+        if (width == 0 && height == 0) {
+            return "";
+        }
+        return id + "_" + width + height;
     }
 }

@@ -1,6 +1,5 @@
 package com.luck.picture.lib.compress;
 
-import android.graphics.BitmapFactory;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -16,6 +15,8 @@ enum Checker {
     public final static String MIME_TYPE_JPEG = "image/jpeg";
 
     public final static String MIME_TYPE_JPG = "image/jpg";
+
+    public final static String MIME_TYPE_HEIC = "image/heic";
 
     private static final String TAG = "Luban";
 
@@ -41,7 +42,7 @@ enum Checker {
         if (TextUtils.isEmpty(mimeType)) {
             return false;
         }
-        return mimeType.startsWith(MIME_TYPE_JPEG) || mimeType.startsWith(MIME_TYPE_JPG);
+        return mimeType.startsWith(MIME_TYPE_HEIC) || mimeType.startsWith(MIME_TYPE_JPEG) || mimeType.startsWith(MIME_TYPE_JPG);
     }
 
     /**
@@ -155,24 +156,12 @@ enum Checker {
         return 0;
     }
 
-    String extSuffix(InputStreamProvider input) {
-        try {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inJustDecodeBounds = true;
-            BitmapFactory.decodeStream(input.open(), null, options);
-            return options.outMimeType.replace("image/", ".");
-        } catch (Exception e) {
+    String extSuffix(String mimeType) {
+        if (TextUtils.isEmpty(mimeType)) {
             return JPG;
         }
-    }
-
-    String extSuffix(String mimeType) {
         try {
-            if (TextUtils.isEmpty(mimeType)) {
-                return JPG;
-            }
-            return mimeType.startsWith("video") ? mimeType.replace("video/", ".")
-                    : mimeType.replace("image/", ".");
+            return mimeType.startsWith("video") ? mimeType.replace("video/", ".") : mimeType.replace("image/", ".");
         } catch (Exception e) {
             return JPG;
         }

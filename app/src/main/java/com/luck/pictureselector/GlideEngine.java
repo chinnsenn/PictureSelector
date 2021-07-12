@@ -13,7 +13,6 @@ import androidx.core.graphics.drawable.RoundedBitmapDrawable;
 import androidx.core.graphics.drawable.RoundedBitmapDrawableFactory;
 
 import com.bumptech.glide.Glide;
-import com.bumptech.glide.request.RequestOptions;
 import com.bumptech.glide.request.target.BitmapImageViewTarget;
 import com.bumptech.glide.request.target.ImageViewTarget;
 import com.luck.picture.lib.engine.ImageEngine;
@@ -92,11 +91,10 @@ public class GlideEngine implements ImageEngine {
                                 // 加载长图
                                 longImageView.setQuickScaleEnabled(true);
                                 longImageView.setZoomEnabled(true);
-                                longImageView.setPanEnabled(true);
                                 longImageView.setDoubleTapZoomDuration(100);
                                 longImageView.setMinimumScaleType(SubsamplingScaleImageView.SCALE_TYPE_CENTER_CROP);
                                 longImageView.setDoubleTapZoomDpi(SubsamplingScaleImageView.ZOOM_FOCUS_CENTER);
-                                longImageView.setImage(ImageSource.bitmap(resource),
+                                longImageView.setImage(ImageSource.cachedBitmap(resource),
                                         new ImageViewState(0, new PointF(0, 0), 0));
                             } else {
                                 // 普通图片
@@ -136,11 +134,10 @@ public class GlideEngine implements ImageEngine {
                                 // 加载长图
                                 longImageView.setQuickScaleEnabled(true);
                                 longImageView.setZoomEnabled(true);
-                                longImageView.setPanEnabled(true);
                                 longImageView.setDoubleTapZoomDuration(100);
                                 longImageView.setMinimumScaleType(SubsamplingScaleImageView.SCALE_TYPE_CENTER_CROP);
                                 longImageView.setDoubleTapZoomDpi(SubsamplingScaleImageView.ZOOM_FOCUS_CENTER);
-                                longImageView.setImage(ImageSource.bitmap(resource),
+                                longImageView.setImage(ImageSource.cachedBitmap(resource),
                                         new ImageViewState(0, new PointF(0, 0), 0));
                             } else {
                                 // 普通图片
@@ -166,7 +163,7 @@ public class GlideEngine implements ImageEngine {
                 .override(180, 180)
                 .centerCrop()
                 .sizeMultiplier(0.5f)
-                .apply(new RequestOptions().placeholder(R.drawable.picture_image_placeholder))
+                .placeholder(R.drawable.picture_image_placeholder)
                 .into(new BitmapImageViewTarget(imageView) {
                     @Override
                     protected void setResource(Bitmap resource) {
@@ -209,7 +206,7 @@ public class GlideEngine implements ImageEngine {
                 .load(url)
                 .override(200, 200)
                 .centerCrop()
-                .apply(new RequestOptions().placeholder(R.drawable.picture_image_placeholder))
+                .placeholder(R.drawable.picture_image_placeholder)
                 .into(imageView);
     }
 

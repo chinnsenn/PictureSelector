@@ -4,33 +4,34 @@ import android.annotation.SuppressLint;
 import android.content.ContentUris;
 import android.content.Context;
 import android.database.Cursor;
-import android.graphics.BitmapFactory;
-import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
-import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.Log;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.FileProvider;
 
 import com.luck.picture.lib.config.PictureConfig;
 import com.luck.picture.lib.config.PictureMimeType;
+import com.luck.picture.lib.manager.PictureCacheManager;
 
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.nio.channels.FileChannel;
 import java.util.Locale;
+import java.util.Objects;
 
 import okio.BufferedSink;
 import okio.BufferedSource;
@@ -44,64 +45,71 @@ import okio.Okio;
 
 public class PictureFileUtils {
 
-    public static final String POSTFIX = ".jpg";
+    public static final String POSTFIX = ".jpeg";
     public static final String POST_VIDEO = ".mp4";
-    public static final String POST_AUDIO = ".mp3";
+    public static final String POST_AUDIO = ".amr";
 
 
     /**
      * @param context
-     * @param type
+     * @param chooseMode
      * @param format
      * @param outCameraDirectory
      * @return
      */
-    @Nullable
-    public static File createCameraFile(Context context, int type, String fileName, String format, String outCameraDirectory) {
-        return createMediaFile(context, type, fileName, format, outCameraDirectory);
+    public static File createCameraFile(Context context, int chooseMode, String fileName, String format, String outCameraDirectory) {
+        return createMediaFile(context, chooseMode, fileName, format, outCameraDirectory);
     }
 
     /**
      * 创建文件
      *
      * @param context
-     * @param type
+     * @param chooseMode
      * @param fileName
      * @param format
      * @param outCameraDirectory
      * @return
      */
-    @Nullable
     private static File createMediaFile(Context context, int chooseMode, String fileName, String format, String outCameraDirectory) {
         return createOutFile(context, chooseMode, fileName, format, outCameraDirectory);
     }
 
-    @Nullable
-    private static File createOutFile(Context context, int chooseMode, String fileName, String format, String outCameraDirectory) {
-        File folderDir = null;
+    /**
+     * 创建文件
+     *
+     * @param ctx                上下文
+     * @param chooseMode         选择模式
+     * @param fileName           文件名
+     * @param format             文件格式
+     * @param outCameraDirectory 输出目录
+     * @return
+     */
+    private static File createOutFile(Context ctx, int chooseMode, String fileName, String format, String outCameraDirectory) {
+        Context context = ctx.getApplicationContext();
+        File folderDir;
         if (TextUtils.isEmpty(outCameraDirectory)) {
             // 外部没有自定义拍照存储路径使用默认
-            String state = Environment.getExternalStorageState();
-            File rootDir = state.equals(Environment.MEDIA_MOUNTED) ? Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
-                    : getRootDirFile(context, chooseMode);
-            if (rootDir != null) {
-                if (!rootDir.exists()) {
-                    rootDir.mkdirs();
-                }
+            File rootDir;
+            if (TextUtils.equals(Environment.MEDIA_MOUNTED, Environment.getExternalStorageState())) {
+                rootDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
                 folderDir = new File(rootDir.getAbsolutePath() + File.separator + PictureMimeType.CAMERA + File.separator);
-                if (!folderDir.exists() && folderDir.mkdirs()) {
-                }
+            } else {
+                rootDir = getRootDirFile(context, chooseMode);
+                folderDir = new File(rootDir.getAbsolutePath() + File.separator);
+            }
+            if (!rootDir.exists()) {
+                rootDir.mkdirs();
             }
         } else {
             // 自定义存储路径
             folderDir = new File(outCameraDirectory);
-            if (!folderDir.exists()) {
-                folderDir.mkdirs();
+            if (!Objects.requireNonNull(folderDir.getParentFile()).exists()) {
+                folderDir.getParentFile().mkdirs();
             }
         }
-
-        if (folderDir == null) {
-            throw new NullPointerException("The media output path cannot be null");
+        if (!folderDir.exists()) {
+            folderDir.mkdirs();
         }
 
         boolean isOutFileNameEmpty = TextUtils.isEmpty(fileName);
@@ -126,7 +134,6 @@ public class PictureFileUtils {
      * @param type
      * @return
      */
-    @Nullable
     private static File getRootDirFile(Context context, int type) {
         switch (type) {
             case PictureConfig.TYPE_VIDEO:
@@ -215,7 +222,7 @@ public class PictureFileUtils {
                 cursor.close();
             }
         }
-        return null;
+        return "";
     }
 
     /**
@@ -257,7 +264,7 @@ public class PictureFileUtils {
 
                 final String id = DocumentsContract.getDocumentId(uri);
                 final Uri contentUri = ContentUris.withAppendedId(
-                        Uri.parse("content://downloads/public_downloads"), Long.valueOf(id));
+                        Uri.parse("content://downloads/public_downloads"), ValueOf.toLong(id));
 
                 return getDataColumn(context, contentUri, null, null);
             }
@@ -299,7 +306,7 @@ public class PictureFileUtils {
             return uri.getPath();
         }
 
-        return null;
+        return "";
     }
 
     /**
@@ -312,21 +319,44 @@ public class PictureFileUtils {
         if (pathFrom.equalsIgnoreCase(pathTo)) {
             return;
         }
-
         FileChannel outputChannel = null;
         FileChannel inputChannel = null;
         try {
             inputChannel = new FileInputStream(new File(pathFrom)).getChannel();
             outputChannel = new FileOutputStream(new File(pathTo)).getChannel();
             inputChannel.transferTo(0, inputChannel.size(), outputChannel);
-            inputChannel.close();
+        } catch (Exception e) {
+            e.printStackTrace();
         } finally {
-            if (inputChannel != null) {
-                inputChannel.close();
-            }
-            if (outputChannel != null) {
-                outputChannel.close();
-            }
+            close(inputChannel);
+            close(outputChannel);
+        }
+    }
+
+
+    /**
+     * Copies one file into the other with the given paths.
+     * In the event that the paths are the same, trying to copy one file to the other
+     * will cause both files to become null.
+     * Simply skipping this step if the paths are identical.
+     */
+    public static boolean copyFile(FileInputStream fileInputStream, String outFilePath) throws IOException {
+        if (fileInputStream == null) {
+            return false;
+        }
+        FileChannel inputChannel = null;
+        FileChannel outputChannel = null;
+        try {
+            inputChannel = fileInputStream.getChannel();
+            outputChannel = new FileOutputStream(new File(outFilePath)).getChannel();
+            inputChannel.transferTo(0, inputChannel.size(), outputChannel);
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            close(fileInputStream);
+            close(inputChannel);
+            close(outputChannel);
         }
     }
 
@@ -402,39 +432,15 @@ public class PictureFileUtils {
     }
 
     /**
-     * 读取图片属性：旋转的角度
+     * 重命名相册拍照
      *
-     * @param path 图片绝对路径
-     * @return degree旋转的角度
+     * @param fileName
+     * @return
      */
-    public static int readPictureDegree(Context context, String path) {
-        int degree = 0;
-        try {
-            ExifInterface exifInterface;
-            if (SdkVersionUtils.checkedAndroid_Q()) {
-                ParcelFileDescriptor parcelFileDescriptor =
-                        context.getContentResolver()
-                                .openFileDescriptor(Uri.parse(path), "r");
-                exifInterface = new ExifInterface(parcelFileDescriptor.getFileDescriptor());
-            } else {
-                exifInterface = new ExifInterface(path);
-            }
-            int orientation = exifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
-            switch (orientation) {
-                case ExifInterface.ORIENTATION_ROTATE_90:
-                    degree = 90;
-                    break;
-                case ExifInterface.ORIENTATION_ROTATE_180:
-                    degree = 180;
-                    break;
-                case ExifInterface.ORIENTATION_ROTATE_270:
-                    degree = 270;
-                    break;
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        return degree;
+    public static String rename(String fileName) {
+        String temp = fileName.substring(0, fileName.lastIndexOf("."));
+        String suffix = fileName.substring(fileName.lastIndexOf("."));
+        return temp + "_" + DateUtils.getCreateFileName() + suffix;
     }
 
     /**
@@ -456,10 +462,12 @@ public class PictureFileUtils {
 
     /**
      * set empty PictureSelector Cache
+     * Use {@link PictureCacheManager}
      *
      * @param mContext
      * @param type     image or video ...
      */
+    @Deprecated
     public static void deleteCacheDirFile(Context mContext, int type) {
         File cutDir = mContext.getExternalFilesDir(type == PictureMimeType.ofImage()
                 ? Environment.DIRECTORY_PICTURES : Environment.DIRECTORY_MOVIES);
@@ -477,10 +485,12 @@ public class PictureFileUtils {
 
     /**
      * set empty PictureSelector Cache
+     * Use {@link PictureCacheManager}
      *
      * @param context
      * @param type    image、video、audio ...
      */
+    @Deprecated
     public static void deleteAllCacheDirFile(Context context) {
 
         File dirPictures = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
@@ -565,7 +575,7 @@ public class PictureFileUtils {
      */
     public static Uri parUri(Context context, File cameraFile) {
         Uri imageUri;
-        String authority = context.getPackageName() + ".provider";
+        String authority = context.getPackageName() + ".luckProvider";
         if (Build.VERSION.SDK_INT > Build.VERSION_CODES.M) {
             //通过FileProvider创建一个content类型的Uri
             imageUri = FileProvider.getUriForFile(context, authority, cameraFile);
@@ -573,23 +583,6 @@ public class PictureFileUtils {
             imageUri = Uri.fromFile(cameraFile);
         }
         return imageUri;
-    }
-
-    /**
-     * 获取图片后缀
-     *
-     * @param input
-     * @return
-     */
-    public static String extSuffix(InputStream input) {
-        try {
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inJustDecodeBounds = true;
-            BitmapFactory.decodeStream(input, null, options);
-            return options.outMimeType.replace("image/", ".");
-        } catch (Exception e) {
-            return PictureMimeType.JPEG;
-        }
     }
 
     /**
@@ -606,31 +599,31 @@ public class PictureFileUtils {
         if (PictureMimeType.isHasVideo(mineType)) {
             // 视频
             String filesDir = PictureFileUtils.getVideoDiskCacheDir(context) + File.separator;
-            if (!TextUtils.isEmpty(md5)) {
-                String fileName = TextUtils.isEmpty(customFileName) ? "VID_" + md5.toUpperCase() + suffix : customFileName;
+            if (TextUtils.isEmpty(md5)) {
+                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("VID_") + suffix : customFileName;
                 return filesDir + fileName;
             } else {
-                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("VID_") + suffix : customFileName;
+                String fileName = TextUtils.isEmpty(customFileName) ? "VID_" + md5.toUpperCase() + suffix : customFileName;
                 return filesDir + fileName;
             }
         } else if (PictureMimeType.isHasAudio(mineType)) {
             // 音频
             String filesDir = PictureFileUtils.getAudioDiskCacheDir(context) + File.separator;
-            if (!TextUtils.isEmpty(md5)) {
-                String fileName = TextUtils.isEmpty(customFileName) ? "AUD_" + md5.toUpperCase() + suffix : customFileName;
+            if (TextUtils.isEmpty(md5)) {
+                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("AUD_") + suffix : customFileName;
                 return filesDir + fileName;
             } else {
-                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("AUD_") + suffix : customFileName;
+                String fileName = TextUtils.isEmpty(customFileName) ? "AUD_" + md5.toUpperCase() + suffix : customFileName;
                 return filesDir + fileName;
             }
         } else {
             // 图片
             String filesDir = PictureFileUtils.getDiskCacheDir(context) + File.separator;
-            if (!TextUtils.isEmpty(md5)) {
-                String fileName = TextUtils.isEmpty(customFileName) ? "IMG_" + md5.toUpperCase() + suffix : customFileName;
+            if (TextUtils.isEmpty(md5)) {
+                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("IMG_") + suffix : customFileName;
                 return filesDir + fileName;
             } else {
-                String fileName = TextUtils.isEmpty(customFileName) ? DateUtils.getCreateFileName("IMG_") + suffix : customFileName;
+                String fileName = TextUtils.isEmpty(customFileName) ? "IMG_" + md5.toUpperCase() + suffix : customFileName;
                 return filesDir + fileName;
             }
         }
@@ -639,24 +632,54 @@ public class PictureFileUtils {
     /**
      * 判断文件是否存在
      *
-     * @param context
      * @param path
      * @return
      */
-    public static boolean isFileExists(Context context, String path) {
-        if (PictureMimeType.isContent(path)) {
-            path = PictureFileUtils.getPath(context, Uri.parse(path));
-        }
-        if (!TextUtils.isEmpty(path) && !new File(path).exists()) {
-            return false;
-        }
-        return true;
+    public static boolean isFileExists(String path) {
+        return TextUtils.isEmpty(path) || new File(path).exists();
     }
+
+    public static final int BYTE = 1;
+    public static final int KB = 1024;
+    public static final int MB = 1048576;
+    public static final int GB = 1073741824;
+
+    @IntDef({BYTE, KB, MB, GB})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface Unit {
+    }
+
+    /**
+     * Size of byte to fit size of memory.
+     * <p>to three decimal places</p>
+     *
+     * @param byteSize  Size of byte.
+     * @param precision The precision
+     * @return fit size of memory
+     */
+    @SuppressLint("DefaultLocale")
+    public static String formatFileSize(final long byteSize, int precision) {
+        if (precision < 0) {
+            throw new IllegalArgumentException("precision shouldn't be less than zero!");
+        }
+        if (byteSize < 0) {
+            throw new IllegalArgumentException("byteSize shouldn't be less than zero!");
+        } else if (byteSize < KB) {
+            return String.format("%." + precision + "fB", (double) byteSize);
+        } else if (byteSize < MB) {
+            return String.format("%." + precision + "fKB", (double) byteSize / KB);
+        } else if (byteSize < GB) {
+            return String.format("%." + precision + "fMB", (double) byteSize / MB);
+        } else {
+            return String.format("%." + precision + "fGB", (double) byteSize / GB);
+        }
+    }
+
 
     @SuppressWarnings("ConstantConditions")
     public static void close(@Nullable Closeable c) {
         // java.lang.IncompatibleClassChangeError: interface not implemented
-        if (c != null && c instanceof Closeable) {
+        if (c instanceof Closeable) {
             try {
                 c.close();
             } catch (Exception e) {

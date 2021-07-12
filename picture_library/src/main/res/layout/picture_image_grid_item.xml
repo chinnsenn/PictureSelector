@@ -13,9 +13,9 @@
         android:id="@+id/tvCheck"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:layout_margin="8dp"
-        android:background="?attr/picture.checked.style"
+        android:background="@drawable/picture_checkbox_selector"
         android:gravity="center"
         android:textColor="@color/picture_color_white"
         android:textSize="12sp" />
@@ -24,14 +24,14 @@
         android:id="@+id/btnCheck"
         android:layout_width="45dp"
         android:layout_height="45dp"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:background="@color/picture_color_transparent" />
 
     <TextView
-        android:id="@+id/tv_isGif"
+        android:id="@+id/tv_image_mime_type"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:layout_alignParentBottom="true"
         android:background="@drawable/picture_gif_tag"
         android:text="@string/picture_gif_tag"
@@ -43,7 +43,7 @@
         android:id="@+id/tv_long_chart"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_alignParentRight="true"
+        android:layout_alignParentEnd="true"
         android:layout_alignParentBottom="true"
         android:background="@drawable/picture_gif_tag"
         android:text="@string/picture_long_chart"
@@ -66,4 +66,14 @@
         android:textColor="@color/picture_color_white"
         android:textSize="11sp"
         android:visibility="gone" />
+
+    <ImageView
+        android:id="@+id/ivEditor"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_alignParentBottom="true"
+        android:visibility="gone"
+        android:layout_margin="3dp"
+        android:src="@drawable/picture_icon_editor" />
+
 </com.luck.picture.lib.widget.SquareRelativeLayout>

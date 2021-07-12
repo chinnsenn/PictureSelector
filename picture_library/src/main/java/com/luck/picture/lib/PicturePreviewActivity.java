@@ -1,12 +1,15 @@
 package com.luck.picture.lib;
 
 import android.content.Intent;
+import android.content.res.ColorStateList;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Parcelable;
 import android.text.TextUtils;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.CheckBox;
@@ -20,21 +23,26 @@ import androidx.viewpager.widget.ViewPager;
 import com.luck.picture.lib.adapter.PictureSimpleFragmentAdapter;
 import com.luck.picture.lib.config.PictureConfig;
 import com.luck.picture.lib.config.PictureMimeType;
+import com.luck.picture.lib.config.PictureSelectionConfig;
+import com.luck.picture.lib.manager.UCropManager;
 import com.luck.picture.lib.entity.LocalMedia;
 import com.luck.picture.lib.listener.OnQueryDataResultListener;
 import com.luck.picture.lib.model.LocalMediaPageLoader;
 import com.luck.picture.lib.observable.ImagesObservable;
-import com.luck.picture.lib.tools.MediaUtils;
+import com.luck.picture.lib.tools.AttrsUtils;
 import com.luck.picture.lib.tools.PictureFileUtils;
 import com.luck.picture.lib.tools.ScreenUtils;
+import com.luck.picture.lib.tools.SdkVersionUtils;
 import com.luck.picture.lib.tools.StringUtils;
 import com.luck.picture.lib.tools.ToastUtils;
 import com.luck.picture.lib.tools.ValueOf;
 import com.luck.picture.lib.tools.VoiceUtils;
 import com.luck.picture.lib.widget.PreviewViewPager;
 import com.yalantis.ucrop.UCrop;
-import com.yalantis.ucrop.model.CutInfo;
 
+import org.jetbrains.annotations.NotNull;
+
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -45,10 +53,14 @@ import java.util.List;
  */
 public class PicturePreviewActivity extends PictureBaseActivity implements
         View.OnClickListener, PictureSimpleFragmentAdapter.OnCallBackActivity {
-    private static final String TAG = PicturePreviewActivity.class.getSimpleName();
+    public static final String TAG = PicturePreviewActivity.class.getSimpleName();
+    protected ViewGroup mTitleBar;
     protected ImageView pictureLeftBack;
-    protected TextView tvMediaNum, tvTitle, mTvPictureOk;
+    protected TextView mTvPictureRight, tvMediaNum, tvTitle, mTvPictureOk;
+    protected ImageView mIvArrow;
     protected PreviewViewPager viewPager;
+    protected View mPicturePreview;
+    protected TextView mPictureEditor;
     protected int position;
     protected boolean isBottomPreview;
     private int totalNumber;
@@ -63,7 +75,6 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     protected Handler mHandler;
     protected RelativeLayout selectBarLayout;
     protected CheckBox mCbOriginal;
-    protected View titleViewBg;
     protected boolean isShowCamera;
     protected String currentDirectory;
     /**
@@ -80,6 +91,10 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      */
     private int mPage = 0;
 
+    /**
+     * 当前文件大小
+     */
+    protected String fileSize;
 
     @Override
     public int getResourceId() {
@@ -91,7 +106,8 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         super.onCreate(savedInstanceState);
         if (savedInstanceState != null) {
             // 防止内存不足时activity被回收，导致图片未选中
-            selectData = PictureSelector.obtainSelectorList(savedInstanceState);
+            List<LocalMedia> cacheData = PictureSelector.obtainSelectorList(savedInstanceState);
+            selectData = cacheData != null ? cacheData : selectData;
             isCompleteOrSelected = savedInstanceState.getBoolean(PictureConfig.EXTRA_COMPLETE_SELECTED, false);
             isChangeSelectedData = savedInstanceState.getBoolean(PictureConfig.EXTRA_CHANGE_SELECTED_DATA, false);
             onImageChecked(position);
@@ -102,60 +118,75 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     @Override
     protected void initWidgets() {
         super.initWidgets();
-        mHandler = new Handler();
-        titleViewBg = findViewById(R.id.titleViewBg);
+        mHandler = new Handler(getMainLooper());
+        mTitleBar = findViewById(R.id.titleBar);
         screenWidth = ScreenUtils.getScreenWidth(this);
         animation = AnimationUtils.loadAnimation(this, R.anim.picture_anim_modal_in);
         pictureLeftBack = findViewById(R.id.pictureLeftBack);
+        mTvPictureRight = findViewById(R.id.picture_right);
+        mIvArrow = findViewById(R.id.ivArrow);
         viewPager = findViewById(R.id.preview_pager);
+        mPicturePreview = findViewById(R.id.picture_id_preview);
+        mPictureEditor = findViewById(R.id.picture_id_editor);
         btnCheck = findViewById(R.id.btnCheck);
         check = findViewById(R.id.check);
         pictureLeftBack.setOnClickListener(this);
-        mTvPictureOk = findViewById(R.id.tv_ok);
+        mTvPictureOk = findViewById(R.id.picture_tv_ok);
         mCbOriginal = findViewById(R.id.cb_original);
-        tvMediaNum = findViewById(R.id.tvMediaNum);
+        tvMediaNum = findViewById(R.id.tv_media_num);
         selectBarLayout = findViewById(R.id.select_bar_layout);
         mTvPictureOk.setOnClickListener(this);
         tvMediaNum.setOnClickListener(this);
         tvTitle = findViewById(R.id.picture_title);
+        mPicturePreview.setVisibility(View.GONE);
+        mIvArrow.setVisibility(View.GONE);
+        mTvPictureRight.setVisibility(View.GONE);
+
+        check.setVisibility(View.VISIBLE);
+        btnCheck.setVisibility(View.VISIBLE);
+
+        if (config.isEditorImage) {
+            mPictureEditor.setVisibility(View.VISIBLE);
+            mPictureEditor.setOnClickListener(this);
+        } else {
+            mPictureEditor.setVisibility(View.GONE);
+        }
         position = getIntent().getIntExtra(PictureConfig.EXTRA_POSITION, 0);
         if (numComplete) {
             initCompleteText(0);
         }
         tvMediaNum.setSelected(config.checkNumMode);
         btnCheck.setOnClickListener(this);
-        selectData = getIntent().
-                getParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST);
-        isBottomPreview = getIntent().
-                getBooleanExtra(PictureConfig.EXTRA_BOTTOM_PREVIEW, false);
+        if (getIntent().getParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST) != null) {
+            selectData = getIntent().getParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST);
+        }
+        isBottomPreview = getIntent().getBooleanExtra(PictureConfig.EXTRA_BOTTOM_PREVIEW, false);
         isShowCamera = getIntent().getBooleanExtra(PictureConfig.EXTRA_SHOW_CAMERA, config.isCamera);
         // 当前目录
         currentDirectory = getIntent().getStringExtra(PictureConfig.EXTRA_IS_CURRENT_DIRECTORY);
-        List<LocalMedia> data;
         if (isBottomPreview) {
             // 底部预览模式
-            data = getIntent().
-                    getParcelableArrayListExtra(PictureConfig.EXTRA_PREVIEW_SELECT_LIST);
+            List<LocalMedia> data = getIntent().getParcelableArrayListExtra(PictureConfig.EXTRA_PREVIEW_SELECT_LIST);
             initViewPageAdapterData(data);
         } else {
-            data = ImagesObservable.getInstance().readPreviewMediaData();
-            boolean isEmpty = data.size() == 0;
+            List<LocalMedia> data = ImagesObservable.getInstance().getData();
+            List<LocalMedia> allAlbumList = new ArrayList<>(data);
+            ImagesObservable.getInstance().clearData();
             totalNumber = getIntent().getIntExtra(PictureConfig.EXTRA_DATA_COUNT, 0);
             if (config.isPageStrategy) {
-                // 分页模式
-                if (isEmpty) {
+                if (allAlbumList.size() == 0) {
                     // 这种情况有可能是单例被回收了导致readPreviewMediaData();返回的数据为0，那就从第一页开始加载吧
                     setNewTitle();
+                    initViewPageAdapterData(allAlbumList);
+                    loadData();
                 } else {
                     mPage = getIntent().getIntExtra(PictureConfig.EXTRA_PAGE, 0);
+                    setTitle();
+                    initViewPageAdapterData(allAlbumList);
                 }
-                initViewPageAdapterData(data);
-                loadData();
-                setTitle();
             } else {
-                // 普通模式
-                initViewPageAdapterData(data);
-                if (isEmpty) {
+                initViewPageAdapterData(allAlbumList);
+                if (allAlbumList.size() == 0) {
                     // 这种情况有可能是单例被回收了导致readPreviewMediaData();返回的数据为0，暂时自动切换成分页模式去获取数据
                     config.isPageStrategy = true;
                     setNewTitle();
@@ -167,11 +198,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         viewPager.addOnPageChangeListener(new ViewPager.OnPageChangeListener() {
             @Override
             public void onPageScrolled(int position, float positionOffset, int positionOffsetPixels) {
-                if (getContext() instanceof PictureSelectorPreviewWeChatStyleActivity) {
-                    //  不做处理
-                } else {
-                    isPreviewEggs(config.previewEggs, position, positionOffsetPixels);
-                }
+                isPreviewEggs(config.previewEggs, position, positionOffsetPixels);
             }
 
             @Override
@@ -192,9 +219,18 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                 }
 
                 if (config.isOriginalControl) {
-                    boolean isHasVideo = PictureMimeType.isHasVideo(media.getMimeType());
-                    mCbOriginal.setVisibility(isHasVideo ? View.GONE : View.VISIBLE);
                     mCbOriginal.setChecked(config.isCheckOriginalImage);
+                    if (config.isDisplayOriginalSize) {
+                        fileSize = PictureFileUtils.formatFileSize(media.getSize(), 2);
+                        mCbOriginal.setText(getString(R.string.picture_original_image, fileSize));
+                    } else {
+                        mCbOriginal.setText(getString(R.string.picture_default_original_image));
+                    }
+                }
+                if (config.isEditorImage) {
+                    mPictureEditor.setVisibility(PictureMimeType.isHasVideo(media.getMimeType()) ? View.GONE : View.VISIBLE);
+                } else {
+                    mPictureEditor.setVisibility(View.GONE);
                 }
                 onPageSelectedChange(media);
 
@@ -221,6 +257,11 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
             mCbOriginal.setChecked(config.isCheckOriginalImage);
             mCbOriginal.setOnCheckedChangeListener((buttonView, isChecked) -> {
                 config.isCheckOriginalImage = isChecked;
+                if (selectData.size() == 0) {
+                    if (isChecked) {
+                        onCheckedComplete();
+                    }
+                }
             });
         }
     }
@@ -231,7 +272,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     private void loadData() {
         long bucketId = getIntent().getLongExtra(PictureConfig.EXTRA_BUCKET_ID, -1);
         mPage++;
-        LocalMediaPageLoader.getInstance(getContext(), config).loadPageMediaData(bucketId, mPage, config.pageSize,
+        LocalMediaPageLoader.getInstance(getContext()).loadPageMediaData(bucketId, mPage, config.pageSize,
                 (OnQueryDataResultListener<LocalMedia>) (result, currentPage, isHasMore) -> {
                     if (!isFinishing()) {
                         this.isHasMore = isHasMore;
@@ -255,7 +296,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     private void loadMoreData() {
         long bucketId = getIntent().getLongExtra(PictureConfig.EXTRA_BUCKET_ID, -1);
         mPage++;
-        LocalMediaPageLoader.getInstance(getContext(), config).loadPageMediaData(bucketId, mPage, config.pageSize,
+        LocalMediaPageLoader.getInstance(getContext()).loadPageMediaData(bucketId, mPage, config.pageSize,
                 (OnQueryDataResultListener<LocalMedia>) (result, currentPage, isHasMore) -> {
                     if (!isFinishing()) {
                         this.isHasMore = isHasMore;
@@ -275,36 +316,60 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
 
     @Override
     protected void initCompleteText(int startCount) {
-        boolean isNotEmptyStyle = config.style != null;
         if (config.selectionMode == PictureConfig.SINGLE) {
             if (startCount <= 0) {
                 // 未选择任何图片
-                mTvPictureOk.setText(isNotEmptyStyle && !TextUtils.isEmpty(config.style.pictureUnCompleteText)
-                        ? config.style.pictureUnCompleteText : getString(R.string.picture_please_select));
+                if (PictureSelectionConfig.uiStyle != null) {
+                    mTvPictureOk.setText(PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText != 0
+                            ? getString(PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText) : getString(R.string.picture_please_select));
+                } else if (PictureSelectionConfig.style != null) {
+                    mTvPictureOk.setText(!TextUtils.isEmpty(PictureSelectionConfig.style.pictureUnCompleteText)
+                            ? PictureSelectionConfig.style.pictureUnCompleteText : getString(R.string.picture_please_select));
+                }
             } else {
                 // 已选择
-                boolean isCompleteReplaceNum = isNotEmptyStyle && config.style.isCompleteReplaceNum;
-                if (isCompleteReplaceNum && !TextUtils.isEmpty(config.style.pictureCompleteText)) {
-                    mTvPictureOk.setText(String.format(config.style.pictureCompleteText, startCount, 1));
-                } else {
-                    mTvPictureOk.setText(isNotEmptyStyle && !TextUtils.isEmpty(config.style.pictureCompleteText)
-                            ? config.style.pictureCompleteText : getString(R.string.picture_done));
+                if (PictureSelectionConfig.uiStyle != null) {
+                    if (PictureSelectionConfig.uiStyle.isCompleteReplaceNum && PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText != 0) {
+                        mTvPictureOk.setText(String.format(getString(PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText), startCount, 1));
+                    } else {
+                        mTvPictureOk.setText(PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText != 0
+                                ? getString(PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText) : getString(R.string.picture_done));
+                    }
+                } else if (PictureSelectionConfig.style != null) {
+                    if (PictureSelectionConfig.style.isCompleteReplaceNum && !TextUtils.isEmpty(PictureSelectionConfig.style.pictureCompleteText)) {
+                        mTvPictureOk.setText(String.format(PictureSelectionConfig.style.pictureCompleteText, startCount, 1));
+                    } else {
+                        mTvPictureOk.setText(!TextUtils.isEmpty(PictureSelectionConfig.style.pictureCompleteText)
+                                ? PictureSelectionConfig.style.pictureCompleteText : getString(R.string.picture_done));
+                    }
                 }
             }
         } else {
-            boolean isCompleteReplaceNum = isNotEmptyStyle && config.style.isCompleteReplaceNum;
             if (startCount <= 0) {
                 // 未选择任何图片
-                mTvPictureOk.setText(isNotEmptyStyle && !TextUtils.isEmpty(config.style.pictureUnCompleteText)
-                        ? config.style.pictureUnCompleteText : getString(R.string.picture_done_front_num,
-                        startCount, config.maxSelectNum));
+                if (PictureSelectionConfig.uiStyle != null) {
+                    mTvPictureOk.setText(PictureSelectionConfig.uiStyle.isCompleteReplaceNum && PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText != 0
+                            ? String.format(getString(PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText), startCount, config.maxSelectNum) : getString(R.string.picture_done_front_num,
+                            startCount, config.maxSelectNum));
+                } else if (PictureSelectionConfig.style != null) {
+                    mTvPictureOk.setText(PictureSelectionConfig.style.isCompleteReplaceNum && !TextUtils.isEmpty(PictureSelectionConfig.style.pictureUnCompleteText)
+                            ? PictureSelectionConfig.style.pictureUnCompleteText : getString(R.string.picture_done_front_num,
+                            startCount, config.maxSelectNum));
+                }
             } else {
                 // 已选择
-                if (isCompleteReplaceNum && !TextUtils.isEmpty(config.style.pictureCompleteText)) {
-                    mTvPictureOk.setText(String.format(config.style.pictureCompleteText, startCount, config.maxSelectNum));
-                } else {
-                    mTvPictureOk.setText(getString(R.string.picture_done_front_num,
-                            startCount, config.maxSelectNum));
+                if (PictureSelectionConfig.uiStyle != null) {
+                    if (PictureSelectionConfig.uiStyle.isCompleteReplaceNum && PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText != 0) {
+                        mTvPictureOk.setText(String.format(getString(PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText), startCount, config.maxSelectNum));
+                    } else {
+                        mTvPictureOk.setText(getString(R.string.picture_done_front_num, startCount, config.maxSelectNum));
+                    }
+                } else if (PictureSelectionConfig.style != null) {
+                    if (PictureSelectionConfig.style.isCompleteReplaceNum && !TextUtils.isEmpty(PictureSelectionConfig.style.pictureCompleteText)) {
+                        mTvPictureOk.setText(String.format(PictureSelectionConfig.style.pictureCompleteText, startCount, config.maxSelectNum));
+                    } else {
+                        mTvPictureOk.setText(getString(R.string.picture_done_front_num, startCount, config.maxSelectNum));
+                    }
                 }
             }
         }
@@ -324,56 +389,163 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      */
     @Override
     public void initPictureSelectorStyle() {
-        if (config.style != null) {
-            if (config.style.pictureTitleTextColor != 0) {
-                tvTitle.setTextColor(config.style.pictureTitleTextColor);
+        if (PictureSelectionConfig.uiStyle != null) {
+            if (PictureSelectionConfig.uiStyle.picture_top_titleTextColor != 0) {
+                tvTitle.setTextColor(PictureSelectionConfig.uiStyle.picture_top_titleTextColor);
             }
-            if (config.style.pictureTitleTextSize != 0) {
-                tvTitle.setTextSize(config.style.pictureTitleTextSize);
+            if (PictureSelectionConfig.uiStyle.picture_top_titleTextSize != 0) {
+                tvTitle.setTextSize(PictureSelectionConfig.uiStyle.picture_top_titleTextSize);
             }
-            if (config.style.pictureLeftBackIcon != 0) {
-                pictureLeftBack.setImageResource(config.style.pictureLeftBackIcon);
+            if (PictureSelectionConfig.uiStyle.picture_top_leftBack != 0) {
+                pictureLeftBack.setImageResource(PictureSelectionConfig.uiStyle.picture_top_leftBack);
             }
-            if (config.style.picturePreviewBottomBgColor != 0) {
-                selectBarLayout.setBackgroundColor(config.style.picturePreviewBottomBgColor);
+            if (PictureSelectionConfig.uiStyle.picture_bottom_barBackgroundColor != 0) {
+                selectBarLayout.setBackgroundColor(PictureSelectionConfig.uiStyle.picture_bottom_barBackgroundColor);
             }
-            if (config.style.pictureCheckNumBgStyle != 0) {
-                tvMediaNum.setBackgroundResource(config.style.pictureCheckNumBgStyle);
+            if (PictureSelectionConfig.uiStyle.picture_bottom_completeRedDotBackground != 0) {
+                tvMediaNum.setBackgroundResource(PictureSelectionConfig.uiStyle.picture_bottom_completeRedDotBackground);
             }
-            if (config.style.pictureCheckedStyle != 0) {
-                check.setBackgroundResource(config.style.pictureCheckedStyle);
+            if (PictureSelectionConfig.uiStyle.picture_check_style != 0) {
+                check.setBackgroundResource(PictureSelectionConfig.uiStyle.picture_check_style);
             }
-            if (config.style.pictureUnCompleteTextColor != 0) {
-                mTvPictureOk.setTextColor(config.style.pictureUnCompleteTextColor);
+            if (PictureSelectionConfig.uiStyle.picture_bottom_completeTextColor.length > 0) {
+                ColorStateList colorStateList = AttrsUtils.getColorStateList(PictureSelectionConfig.uiStyle.picture_bottom_completeTextColor);
+                if (colorStateList != null) {
+                    mTvPictureOk.setTextColor(colorStateList);
+                }
             }
-            if (!TextUtils.isEmpty(config.style.pictureUnCompleteText)) {
-                mTvPictureOk.setText(config.style.pictureUnCompleteText);
+            if (PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText != 0) {
+                mTvPictureOk.setText(PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText);
             }
-        }
-        titleViewBg.setBackgroundColor(colorPrimary);
+            if (PictureSelectionConfig.uiStyle.picture_top_titleBarHeight > 0) {
+                ViewGroup.LayoutParams params = mTitleBar.getLayoutParams();
+                params.height = PictureSelectionConfig.uiStyle.picture_top_titleBarHeight;
+            }
+            if (PictureSelectionConfig.uiStyle.picture_bottom_barHeight > 0) {
+                ViewGroup.LayoutParams params = selectBarLayout.getLayoutParams();
+                params.height = PictureSelectionConfig.uiStyle.picture_bottom_barHeight;
+            }
 
-        if (config.isOriginalControl) {
-            if (config.style != null) {
-                if (config.style.pictureOriginalControlStyle != 0) {
-                    mCbOriginal.setButtonDrawable(config.style.pictureOriginalControlStyle);
+            if (config.isEditorImage) {
+                if (PictureSelectionConfig.uiStyle.picture_bottom_preview_editorTextSize != 0) {
+                    mPictureEditor.setTextSize(PictureSelectionConfig.uiStyle.picture_bottom_preview_editorTextSize);
+                }
+                if (PictureSelectionConfig.uiStyle.picture_bottom_preview_editorTextColor != 0) {
+                    mPictureEditor.setTextColor(PictureSelectionConfig.uiStyle.picture_bottom_preview_editorTextColor);
+                }
+            }
+
+            if (config.isOriginalControl) {
+                if (PictureSelectionConfig.uiStyle.picture_bottom_originalPictureCheckStyle != 0) {
+                    mCbOriginal.setButtonDrawable(PictureSelectionConfig.uiStyle.picture_bottom_originalPictureCheckStyle);
                 } else {
                     mCbOriginal.setButtonDrawable(ContextCompat.getDrawable(this, R.drawable.picture_original_checkbox));
                 }
-                if (config.style.pictureOriginalFontColor != 0) {
-                    mCbOriginal.setTextColor(config.style.pictureOriginalFontColor);
+                if (PictureSelectionConfig.uiStyle.picture_bottom_originalPictureTextColor != 0) {
+                    mCbOriginal.setTextColor(PictureSelectionConfig.uiStyle.picture_bottom_originalPictureTextColor);
                 } else {
                     mCbOriginal.setTextColor(ContextCompat.getColor(this, R.color.picture_color_53575e));
                 }
-                if (config.style.pictureOriginalTextSize != 0) {
-                    mCbOriginal.setTextSize(config.style.pictureOriginalTextSize);
+                if (PictureSelectionConfig.uiStyle.picture_bottom_originalPictureTextSize != 0) {
+                    mCbOriginal.setTextSize(PictureSelectionConfig.uiStyle.picture_bottom_originalPictureTextSize);
                 }
             } else {
                 mCbOriginal.setButtonDrawable(ContextCompat.getDrawable(this, R.drawable.picture_original_checkbox));
-
                 mCbOriginal.setTextColor(ContextCompat.getColor(this, R.color.picture_color_53575e));
             }
-        }
+        } else if (PictureSelectionConfig.style != null) {
+            if (PictureSelectionConfig.style.pictureTitleTextColor != 0) {
+                tvTitle.setTextColor(PictureSelectionConfig.style.pictureTitleTextColor);
+            }
+            if (PictureSelectionConfig.style.pictureTitleTextSize != 0) {
+                tvTitle.setTextSize(PictureSelectionConfig.style.pictureTitleTextSize);
+            }
+            if (PictureSelectionConfig.style.pictureLeftBackIcon != 0) {
+                pictureLeftBack.setImageResource(PictureSelectionConfig.style.pictureLeftBackIcon);
+            }
+            if (PictureSelectionConfig.style.picturePreviewBottomBgColor != 0) {
+                selectBarLayout.setBackgroundColor(PictureSelectionConfig.style.picturePreviewBottomBgColor);
+            }
+            if (PictureSelectionConfig.style.pictureCheckNumBgStyle != 0) {
+                tvMediaNum.setBackgroundResource(PictureSelectionConfig.style.pictureCheckNumBgStyle);
+            }
+            if (PictureSelectionConfig.style.pictureCheckedStyle != 0) {
+                check.setBackgroundResource(PictureSelectionConfig.style.pictureCheckedStyle);
+            }
+            if (PictureSelectionConfig.style.pictureUnCompleteTextColor != 0) {
+                mTvPictureOk.setTextColor(PictureSelectionConfig.style.pictureUnCompleteTextColor);
+            }
+            if (!TextUtils.isEmpty(PictureSelectionConfig.style.pictureUnCompleteText)) {
+                mTvPictureOk.setText(PictureSelectionConfig.style.pictureUnCompleteText);
+            }
+            if (PictureSelectionConfig.style.pictureTitleBarHeight > 0) {
+                ViewGroup.LayoutParams params = mTitleBar.getLayoutParams();
+                params.height = PictureSelectionConfig.style.pictureTitleBarHeight;
+            }
 
+            if (config.isEditorImage) {
+                if (PictureSelectionConfig.style.picturePreviewEditorTextSize != 0) {
+                    mPictureEditor.setTextSize(PictureSelectionConfig.style.picturePreviewEditorTextSize);
+                }
+                if (PictureSelectionConfig.style.picturePreviewEditorTextColor != 0) {
+                    mPictureEditor.setTextColor(PictureSelectionConfig.style.picturePreviewEditorTextColor);
+                }
+            }
+
+            if (config.isOriginalControl) {
+                if (PictureSelectionConfig.style.pictureOriginalControlStyle != 0) {
+                    mCbOriginal.setButtonDrawable(PictureSelectionConfig.style.pictureOriginalControlStyle);
+                } else {
+                    mCbOriginal.setButtonDrawable(ContextCompat.getDrawable(this, R.drawable.picture_original_checkbox));
+                }
+                if (PictureSelectionConfig.style.pictureOriginalFontColor != 0) {
+                    mCbOriginal.setTextColor(PictureSelectionConfig.style.pictureOriginalFontColor);
+                } else {
+                    mCbOriginal.setTextColor(ContextCompat.getColor(this, R.color.picture_color_53575e));
+                }
+                if (PictureSelectionConfig.style.pictureOriginalTextSize != 0) {
+                    mCbOriginal.setTextSize(PictureSelectionConfig.style.pictureOriginalTextSize);
+                }
+            } else {
+                mCbOriginal.setButtonDrawable(ContextCompat.getDrawable(this, R.drawable.picture_original_checkbox));
+                mCbOriginal.setTextColor(ContextCompat.getColor(this, R.color.picture_color_53575e));
+            }
+        } else {
+            Drawable pictureCheckedStyle = AttrsUtils.getTypeValueDrawable(getContext(), R.attr.picture_checked_style, R.drawable.picture_checkbox_selector);
+            check.setBackground(pictureCheckedStyle);
+            ColorStateList completeColorStateList = AttrsUtils.getTypeValueColorStateList(getContext(), R.attr.picture_ac_preview_complete_textColor);
+            if (completeColorStateList != null) {
+                mTvPictureOk.setTextColor(completeColorStateList);
+            }
+            Drawable leftDrawable = AttrsUtils.getTypeValueDrawable(getContext(), R.attr.picture_preview_leftBack_icon, R.drawable.picture_icon_back);
+            pictureLeftBack.setImageDrawable(leftDrawable);
+
+            int titleColor = AttrsUtils.getTypeValueColor(getContext(), R.attr.picture_ac_preview_title_textColor);
+            if (titleColor != 0) {
+                tvTitle.setTextColor(titleColor);
+            }
+            Drawable ovalBgDrawable = AttrsUtils.getTypeValueDrawable(getContext(), R.attr.picture_num_style, R.drawable.picture_num_oval);
+            tvMediaNum.setBackground(ovalBgDrawable);
+
+            int previewBottomBgColor = AttrsUtils.getTypeValueColor(getContext(), R.attr.picture_ac_preview_bottom_bg);
+            if (previewBottomBgColor != 0) {
+                selectBarLayout.setBackgroundColor(previewBottomBgColor);
+            }
+            int titleBarHeight = AttrsUtils.getTypeValueSizeForInt(getContext(), R.attr.picture_titleBar_height);
+            if (titleBarHeight > 0) {
+                ViewGroup.LayoutParams params = mTitleBar.getLayoutParams();
+                params.height = titleBarHeight;
+            }
+            if (config.isOriginalControl) {
+                Drawable originalDrawable = AttrsUtils.getTypeValueDrawable(getContext(), R.attr.picture_original_check_style, R.drawable.picture_original_wechat_checkbox);
+                mCbOriginal.setButtonDrawable(originalDrawable);
+                int originalTextColor = AttrsUtils.getTypeValueColor(getContext(), R.attr.picture_original_text_color);
+                if (originalTextColor != 0) {
+                    mCbOriginal.setTextColor(originalTextColor);
+                }
+            }
+        }
+        mTitleBar.setBackgroundColor(colorPrimary);
         onSelectNumChange(false);
     }
 
@@ -392,22 +564,30 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                     media = adapter.getItem(position);
                     if (media != null) {
                         check.setSelected(isSelected(media));
-                        if (config.checkNumMode) {
-                            num = media.getNum();
-                            check.setText(ValueOf.toString(num));
-                            notifyCheckChanged(media);
-                            onImageChecked(position);
+                        if (config.isWeChatStyle) {
+                            onUpdateSelectedChange(media);
+                        } else {
+                            if (config.checkNumMode) {
+                                num = media.getNum();
+                                check.setText(ValueOf.toString(num));
+                                notifyCheckChanged(media);
+                                onImageChecked(position);
+                            }
                         }
                     }
                 } else {
                     media = adapter.getItem(position + 1);
                     if (media != null) {
                         check.setSelected(isSelected(media));
-                        if (config.checkNumMode) {
-                            num = media.getNum();
-                            check.setText(ValueOf.toString(num));
-                            notifyCheckChanged(media);
-                            onImageChecked(position + 1);
+                        if (config.isWeChatStyle) {
+                            onUpdateSelectedChange(media);
+                        } else {
+                            if (config.checkNumMode) {
+                                num = media.getNum();
+                                check.setText(ValueOf.toString(num));
+                                notifyCheckChanged(media);
+                                onImageChecked(position + 1);
+                            }
                         }
                     }
                 }
@@ -421,7 +601,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      * @param list
      */
     private void initViewPageAdapterData(List<LocalMedia> list) {
-        adapter = new PictureSimpleFragmentAdapter(config, this);
+        adapter = new PictureSimpleFragmentAdapter(getContext(), config, this);
         adapter.bindData(list);
         viewPager.setAdapter(adapter);
         viewPager.setCurrentItem(position);
@@ -430,6 +610,14 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         LocalMedia media = adapter.getItem(position);
         if (media != null) {
             index = media.getPosition();
+            if (config.isOriginalControl) {
+                if (config.isDisplayOriginalSize) {
+                    fileSize = PictureFileUtils.formatFileSize(media.getSize(), 2);
+                    mCbOriginal.setText(getString(R.string.picture_original_image, fileSize));
+                } else {
+                     mCbOriginal.setText(getString(R.string.picture_default_original_image));
+                }
+            }
             if (config.checkNumMode) {
                 tvMediaNum.setSelected(true);
                 check.setText(ValueOf.toString(media.getNum()));
@@ -472,7 +660,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                 if (media.getPath().equals(imageBean.getPath())
                         || media.getId() == imageBean.getId()) {
                     imageBean.setNum(media.getNum());
-                    check.setText(String.valueOf(imageBean.getNum()));
+                    check.setText(ValueOf.toString(imageBean.getNum()));
                 }
             }
         }
@@ -531,9 +719,9 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         if (enable) {
             mTvPictureOk.setEnabled(true);
             mTvPictureOk.setSelected(true);
-            if (config.style != null) {
-                if (config.style.pictureCompleteTextColor != 0) {
-                    mTvPictureOk.setTextColor(config.style.pictureCompleteTextColor);
+            if (PictureSelectionConfig.style != null) {
+                if (PictureSelectionConfig.style.pictureCompleteTextColor != 0) {
+                    mTvPictureOk.setTextColor(PictureSelectionConfig.style.pictureCompleteTextColor);
                 } else {
                     mTvPictureOk.setTextColor(ContextCompat.getColor(getContext(), R.color.picture_color_fa632d));
                 }
@@ -545,9 +733,15 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                     tvMediaNum.startAnimation(animation);
                 }
                 tvMediaNum.setVisibility(View.VISIBLE);
-                tvMediaNum.setText(String.valueOf(selectData.size()));
-                if (config.style != null && !TextUtils.isEmpty(config.style.pictureCompleteText)) {
-                    mTvPictureOk.setText(config.style.pictureCompleteText);
+                tvMediaNum.setText(ValueOf.toString(selectData.size()));
+                if (PictureSelectionConfig.uiStyle != null) {
+                    if (PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText != 0) {
+                        mTvPictureOk.setText(PictureSelectionConfig.uiStyle.picture_bottom_completeNormalText);
+                    }
+                } else if (PictureSelectionConfig.style != null) {
+                    if (!TextUtils.isEmpty(PictureSelectionConfig.style.pictureCompleteText)) {
+                        mTvPictureOk.setText(PictureSelectionConfig.style.pictureCompleteText);
+                    }
                 } else {
                     mTvPictureOk.setText(getString(R.string.picture_completed));
                 }
@@ -555,9 +749,9 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         } else {
             mTvPictureOk.setEnabled(false);
             mTvPictureOk.setSelected(false);
-            if (config.style != null) {
-                if (config.style.pictureUnCompleteTextColor != 0) {
-                    mTvPictureOk.setTextColor(config.style.pictureUnCompleteTextColor);
+            if (PictureSelectionConfig.style != null) {
+                if (PictureSelectionConfig.style.pictureUnCompleteTextColor != 0) {
+                    mTvPictureOk.setTextColor(PictureSelectionConfig.style.pictureUnCompleteTextColor);
                 } else {
                     mTvPictureOk.setTextColor(ContextCompat.getColor(getContext(), R.color.picture_color_9b));
                 }
@@ -566,8 +760,14 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                 initCompleteText(0);
             } else {
                 tvMediaNum.setVisibility(View.INVISIBLE);
-                if (config.style != null && !TextUtils.isEmpty(config.style.pictureUnCompleteText)) {
-                    mTvPictureOk.setText(config.style.pictureUnCompleteText);
+                if (PictureSelectionConfig.uiStyle != null) {
+                    if (PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText != 0) {
+                        mTvPictureOk.setText(PictureSelectionConfig.uiStyle.picture_bottom_completeDefaultText);
+                    }
+                } else if (PictureSelectionConfig.style != null) {
+                    if (!TextUtils.isEmpty(PictureSelectionConfig.style.pictureUnCompleteText)) {
+                        mTvPictureOk.setText(PictureSelectionConfig.style.pictureUnCompleteText);
+                    }
                 } else {
                     mTvPictureOk.setText(getString(R.string.picture_please_select));
                 }
@@ -580,18 +780,32 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         int id = view.getId();
         if (id == R.id.pictureLeftBack) {
             onBackPressed();
-        } else if (id == R.id.tv_ok || id == R.id.tvMediaNum) {
+        } else if (id == R.id.picture_tv_ok || id == R.id.tv_media_num) {
             onComplete();
         } else if (id == R.id.btnCheck) {
             onCheckedComplete();
+        } else if (id == R.id.picture_id_editor) {
+            onEditorImage();
+        }
+    }
+
+    protected void onEditorImage() {
+        if (adapter.getSize() > 0) {
+            LocalMedia image = adapter.getItem(viewPager.getCurrentItem());
+            UCropManager.ofEditorImage(this, image.isEditorImage() && !TextUtils.isEmpty(image.getCutPath()) ? image.getCutPath() : image.getPath(), image.getMimeType());
         }
     }
 
     protected void onCheckedComplete() {
         if (adapter.getSize() > 0) {
             LocalMedia image = adapter.getItem(viewPager.getCurrentItem());
-            String mimeType = selectData.size() > 0 ?
-                    selectData.get(0).getMimeType() : "";
+            // If the original path does not exist or the path does exist but the file does not exist
+            String newPath = image.getRealPath();
+            if (!TextUtils.isEmpty(newPath) && !new File(newPath).exists()) {
+                ToastUtils.s(getContext(), PictureMimeType.s(getContext(), image.getMimeType()));
+                return;
+            }
+            String mimeType = selectData.size() > 0 ? selectData.get(0).getMimeType() : "";
             int currentSize = selectData.size();
             if (config.isWithVideoImage) {
                 // 混选模式
@@ -602,14 +816,14 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                         videoSize++;
                     }
                 }
-                if (image != null && PictureMimeType.isHasVideo(image.getMimeType())) {
+                if (PictureMimeType.isHasVideo(image.getMimeType())) {
                     if (config.maxVideoSelectNum <= 0) {
                         // 如果视频可选数量是0
                         showPromptDialog(getString(R.string.picture_rule));
                         return;
                     }
 
-                    if (selectData.size() >= config.maxSelectNum && !check.isSelected()) {
+                    if (currentSize >= config.maxSelectNum && !check.isSelected()) {
                         showPromptDialog(getString(R.string.picture_message_max_num, config.maxSelectNum));
                         return;
                     }
@@ -631,9 +845,8 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                         showPromptDialog(getContext().getString(R.string.picture_choose_max_seconds, config.videoMaxSecond / 1000));
                         return;
                     }
-                }
-                if (image != null && PictureMimeType.isHasImage(image.getMimeType())) {
-                    if (selectData.size() >= config.maxSelectNum && !check.isSelected()) {
+                } else {
+                    if (currentSize >= config.maxSelectNum && !check.isSelected()) {
                         showPromptDialog(getString(R.string.picture_message_max_num, config.maxSelectNum));
                         return;
                     }
@@ -702,46 +915,11 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                 if (config.selectionMode == PictureConfig.SINGLE) {
                     selectData.clear();
                 }
-                if (!TextUtils.isEmpty(image.getRealPath()) && PictureMimeType.isContent(image.getPath())) {
-                    image.setRealPath(PictureFileUtils.getPath(getContext(), Uri.parse(image.getPath())));
-                }
-
-                // 如果宽高为0，重新获取宽高
-                if (image.getWidth() == 0 || image.getHeight() == 0) {
-                    int width = 0, height = 0;
-                    image.setOrientation(-1);
-                    if (PictureMimeType.isContent(image.getPath())) {
-                        if (PictureMimeType.isHasVideo(image.getMimeType())) {
-                            int[] size = MediaUtils.getVideoSizeForUri(getContext(), Uri.parse(image.getPath()));
-                            width = size[0];
-                            height = size[1];
-                        } else if (PictureMimeType.isHasImage(image.getMimeType())) {
-                            int[] size = MediaUtils.getImageSizeForUri(getContext(), Uri.parse(image.getPath()));
-                            width = size[0];
-                            height = size[1];
-                        }
-                    } else {
-                        if (PictureMimeType.isHasVideo(image.getMimeType())) {
-                            int[] size = MediaUtils.getVideoSizeForUrl(image.getPath());
-                            width = size[0];
-                            height = size[1];
-                        } else if (PictureMimeType.isHasImage(image.getMimeType())) {
-                            int[] size = MediaUtils.getImageSizeForUrl(image.getPath());
-                            width = size[0];
-                            height = size[1];
-                        }
-                    }
-                    image.setWidth(width);
-                    image.setHeight(height);
-                }
-
-                // 如果有旋转信息图片宽高则是相反
-                MediaUtils.setOrientationAsynchronous(getContext(), image, null);
                 selectData.add(image);
                 onSelectedChange(true, image);
                 image.setNum(selectData.size());
                 if (config.checkNumMode) {
-                    check.setText(String.valueOf(image.getNum()));
+                    check.setText(ValueOf.toString(image.getNum()));
                 }
             } else {
                 int size = selectData.size();
@@ -768,6 +946,24 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      * @param media
      */
     protected void onSelectedChange(boolean isAddRemove, LocalMedia media) {
+
+    }
+
+    /**
+     * 更新画廊数据
+     *
+     * @param media
+     */
+    protected void onUpdateGalleryChange(LocalMedia media) {
+
+    }
+
+    /**
+     * 更新选中或是移除状态
+     *
+     * @param media
+     */
+    protected void onUpdateSelectedChange(LocalMedia media) {
 
     }
 
@@ -820,10 +1016,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
         }
         isCompleteOrSelected = true;
         isChangeSelectedData = true;
-        if (config.isCheckOriginalImage) {
-            onBackPressed();
-            return;
-        }
+
         if (config.chooseMode == PictureMimeType.ofAll() && config.isWithVideoImage) {
             bothMimeTypeWith(mimeType, image);
         } else {
@@ -838,17 +1031,16 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      * @param image
      */
     private void bothMimeTypeWith(String mimeType, LocalMedia image) {
-        if (config.enableCrop) {
+        if (config.enableCrop && !config.isCheckOriginalImage) {
             isCompleteOrSelected = false;
             boolean isHasImage = PictureMimeType.isHasImage(mimeType);
             if (config.selectionMode == PictureConfig.SINGLE && isHasImage) {
                 config.originalPath = image.getPath();
-                startCrop(config.originalPath, image.getMimeType());
+                UCropManager.ofCrop(this, config.originalPath, image.getMimeType());
             } else {
                 // 是图片和选择压缩并且是多张，调用批量压缩
-                ArrayList<CutInfo> cuts = new ArrayList<>();
-                int count = selectData.size();
                 int imageNum = 0;
+                int count = selectData.size();
                 for (int i = 0; i < count; i++) {
                     LocalMedia media = selectData.get(i);
                     if (media == null
@@ -858,17 +1050,6 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                     if (PictureMimeType.isHasImage(media.getMimeType())) {
                         imageNum++;
                     }
-                    CutInfo cutInfo = new CutInfo();
-                    cutInfo.setId(media.getId());
-                    cutInfo.setPath(media.getPath());
-                    cutInfo.setImageWidth(media.getWidth());
-                    cutInfo.setImageHeight(media.getHeight());
-                    cutInfo.setMimeType(media.getMimeType());
-                    cutInfo.setAndroidQToPath(media.getAndroidQToPath());
-                    cutInfo.setId(media.getId());
-                    cutInfo.setDuration(media.getDuration());
-                    cutInfo.setRealPath(media.getRealPath());
-                    cuts.add(cutInfo);
                 }
                 if (imageNum <= 0) {
                     // 全是视频
@@ -876,7 +1057,7 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
                     onBackPressed();
                 } else {
                     // 图片和视频共存
-                    startCrop(cuts);
+                    UCropManager.ofCrop(this, (ArrayList<LocalMedia>) selectData);
                 }
             }
         } else {
@@ -891,34 +1072,14 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
      * @param image
      */
     private void separateMimeTypeWith(String mimeType, LocalMedia image) {
-        if (config.enableCrop && PictureMimeType.isHasImage(mimeType)) {
+        if (config.enableCrop && !config.isCheckOriginalImage && PictureMimeType.isHasImage(mimeType)) {
             isCompleteOrSelected = false;
             if (config.selectionMode == PictureConfig.SINGLE) {
                 config.originalPath = image.getPath();
-                startCrop(config.originalPath, image.getMimeType());
+                UCropManager.ofCrop(this, config.originalPath, image.getMimeType());
             } else {
                 // 是图片和选择压缩并且是多张，调用批量压缩
-                ArrayList<CutInfo> cuts = new ArrayList<>();
-                int count = selectData.size();
-                for (int i = 0; i < count; i++) {
-                    LocalMedia media = selectData.get(i);
-                    if (media == null
-                            || TextUtils.isEmpty(media.getPath())) {
-                        continue;
-                    }
-                    CutInfo cutInfo = new CutInfo();
-                    cutInfo.setId(media.getId());
-                    cutInfo.setPath(media.getPath());
-                    cutInfo.setImageWidth(media.getWidth());
-                    cutInfo.setImageHeight(media.getHeight());
-                    cutInfo.setMimeType(media.getMimeType());
-                    cutInfo.setAndroidQToPath(media.getAndroidQToPath());
-                    cutInfo.setId(media.getId());
-                    cutInfo.setDuration(media.getDuration());
-                    cutInfo.setRealPath(media.getRealPath());
-                    cuts.add(cutInfo);
-                }
-                startCrop(cuts);
+                UCropManager.ofCrop(this, (ArrayList<LocalMedia>) selectData);
             }
         } else {
             onBackPressed();
@@ -932,27 +1093,77 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
             switch (requestCode) {
                 case UCrop.REQUEST_MULTI_CROP:
                     // 裁剪数据
-                    List<CutInfo> list = UCrop.getMultipleOutput(data);
-                    data.putParcelableArrayListExtra(UCrop.Options.EXTRA_OUTPUT_URI_LIST,
-                            (ArrayList<? extends Parcelable>) list);
+                    ArrayList<LocalMedia> list = UCrop.getMultipleOutput(data);
+                    data.putParcelableArrayListExtra(UCrop.Options.EXTRA_OUTPUT_URI_LIST, list);
                     // 已选数量
-                    data.putParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST,
-                            (ArrayList<? extends Parcelable>) selectData);
+                    data.putParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST, (ArrayList<? extends Parcelable>) selectData);
                     setResult(RESULT_OK, data);
                     finish();
                     break;
                 case UCrop.REQUEST_CROP:
                     if (data != null) {
-                        data.putParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST,
-                                (ArrayList<? extends Parcelable>) selectData);
-                        setResult(RESULT_OK, data);
+                        boolean isEditorImage = data.getBooleanExtra(UCrop.EXTRA_EDITOR_IMAGE, false);
+                        if (isEditorImage) {
+                            Uri resultUri = UCrop.getOutput(data);
+                            if (resultUri != null && adapter != null) {
+                                String cutPath = resultUri.getPath();
+                                LocalMedia curLocalMedia = adapter.getItem(viewPager.getCurrentItem());
+                                LocalMedia selectLocalMedia = null;
+                                boolean isExits = false;
+                                for (int i = 0; i < selectData.size(); i++) {
+                                    LocalMedia item = selectData.get(i);
+                                    if (TextUtils.equals(curLocalMedia.getPath(), item.getPath()) || curLocalMedia.getId() == item.getId()) {
+                                        isExits = true;
+                                        selectLocalMedia = item;
+                                        break;
+                                    }
+                                }
+                                // 更新当前适配选中的LocalMedia裁剪参数
+                                curLocalMedia.setCut(!TextUtils.isEmpty(cutPath));
+                                curLocalMedia.setCutPath(cutPath);
+                                curLocalMedia.setCropOffsetX(data.getIntExtra(UCrop.EXTRA_OUTPUT_OFFSET_X, 0));
+                                curLocalMedia.setCropOffsetY(data.getIntExtra(UCrop.EXTRA_OUTPUT_OFFSET_Y, 0));
+                                curLocalMedia.setCropResultAspectRatio(data.getFloatExtra(UCrop.EXTRA_OUTPUT_CROP_ASPECT_RATIO, 0));
+                                curLocalMedia.setCropImageWidth(data.getIntExtra(UCrop.EXTRA_OUTPUT_IMAGE_WIDTH, 0));
+                                curLocalMedia.setCropImageHeight(data.getIntExtra(UCrop.EXTRA_OUTPUT_IMAGE_HEIGHT, 0));
+                                curLocalMedia.setEditorImage(true);
+                                if (SdkVersionUtils.checkedAndroid_Q() && PictureMimeType.isContent(curLocalMedia.getPath())) {
+                                    curLocalMedia.setAndroidQToPath(cutPath);
+                                }
+                                if (isExits) {
+                                    // 更新当前选中列表的LocalMedia裁剪参数
+                                    selectLocalMedia.setCut(!TextUtils.isEmpty(cutPath));
+                                    selectLocalMedia.setCutPath(cutPath);
+                                    selectLocalMedia.setCropOffsetX(data.getIntExtra(UCrop.EXTRA_OUTPUT_OFFSET_X, 0));
+                                    selectLocalMedia.setCropOffsetY(data.getIntExtra(UCrop.EXTRA_OUTPUT_OFFSET_Y, 0));
+                                    selectLocalMedia.setCropResultAspectRatio(data.getFloatExtra(UCrop.EXTRA_OUTPUT_CROP_ASPECT_RATIO, 0));
+                                    selectLocalMedia.setCropImageWidth(data.getIntExtra(UCrop.EXTRA_OUTPUT_IMAGE_WIDTH, 0));
+                                    selectLocalMedia.setCropImageHeight(data.getIntExtra(UCrop.EXTRA_OUTPUT_IMAGE_HEIGHT, 0));
+                                    selectLocalMedia.setEditorImage(true);
+                                    if (SdkVersionUtils.checkedAndroid_Q() && PictureMimeType.isContent(curLocalMedia.getPath())) {
+                                        selectLocalMedia.setAndroidQToPath(cutPath);
+                                    }
+                                    isChangeSelectedData = true;
+                                    onUpdateGalleryChange(selectLocalMedia);
+                                } else {
+                                    onCheckedComplete();
+                                }
+                                adapter.notifyDataSetChanged();
+                            }
+                        } else {
+                            data.putParcelableArrayListExtra(PictureConfig.EXTRA_SELECT_LIST,
+                                    (ArrayList<? extends Parcelable>) selectData);
+                            setResult(RESULT_OK, data);
+                            finish();
+                        }
                     }
-                    finish();
                     break;
             }
         } else if (resultCode == UCrop.RESULT_ERROR) {
             Throwable throwable = (Throwable) data.getSerializableExtra(UCrop.EXTRA_ERROR);
-            ToastUtils.s(getContext(), throwable.getMessage());
+            if (throwable != null) {
+                ToastUtils.s(getContext(), throwable.getMessage());
+            }
         }
     }
 
@@ -960,15 +1171,9 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     @Override
     public void onBackPressed() {
         updateResult();
-        if (config.windowAnimationStyle != null
-                && config.windowAnimationStyle.activityPreviewExitAnimation != 0) {
-            finish();
-            overridePendingTransition(0, config.windowAnimationStyle != null
-                    && config.windowAnimationStyle.activityPreviewExitAnimation != 0 ?
-                    config.windowAnimationStyle.activityPreviewExitAnimation : R.anim.picture_anim_exit);
-        } else {
-            closeActivity();
-        }
+        finish();
+        overridePendingTransition(0, PictureSelectionConfig.windowAnimationStyle.activityPreviewExitAnimation);
+
     }
 
     /**
@@ -989,19 +1194,19 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     }
 
     @Override
-    protected void onSaveInstanceState(Bundle outState) {
+    protected void onSaveInstanceState(@NotNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putBoolean(PictureConfig.EXTRA_COMPLETE_SELECTED, isCompleteOrSelected);
         outState.putBoolean(PictureConfig.EXTRA_CHANGE_SELECTED_DATA, isChangeSelectedData);
         PictureSelector.saveSelectorList(outState, selectData);
+        if (adapter != null) {
+            ImagesObservable.getInstance().saveData(adapter.getData());
+        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (!isOnSaveInstanceState) {
-            ImagesObservable.getInstance().clearPreviewMediaData();
-        }
         if (mHandler != null) {
             mHandler.removeCallbacksAndMessages(null);
             mHandler = null;
@@ -1019,5 +1224,4 @@ public class PicturePreviewActivity extends PictureBaseActivity implements
     public void onActivityBackPressed() {
         onBackPressed();
     }
-
 }
